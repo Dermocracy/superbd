@@ -26,7 +26,7 @@ def start(message):
     if not user:
         add_user(user_id, username, first_name, last_name)
     bot.send_message(user_id, "Добро пожаловать! Выберите действие:", reply_markup=main_menu())
-
+#123
 def main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("📋 To-do", "🔍 Поиск")
