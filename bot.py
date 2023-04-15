@@ -107,7 +107,9 @@ def display_projects(message):
 
             markup = types.InlineKeyboardMarkup()
             manage_button = types.InlineKeyboardButton("🔧 Управление", callback_data=f"manage_project:{project_id}")
-            markup.add(manage_button)
+            open_tasks_button = types.InlineKeyboardButton("📋 Задачи", callback_data=f"open_tasks:{project_id}")
+            open_messages_button = types.InlineKeyboardButton("💬 Сообщения", callback_data=f"open_messages:{project_id}")
+            markup.add(manage_button, open_tasks_button, open_messages_button)
 
             bot.send_message(user_id, project_title, reply_markup=markup)
 
@@ -117,19 +119,8 @@ def display_projects(message):
     create_project_markup.add(create_project_button)
     bot.send_message(user_id, "Создать новый проект:", reply_markup=create_project_markup)
 
-def manage_project(message, project_id):
-    user_id = message.chat.id   
-    project = get_project_by_id(project_id)
 
-    if not project or not is_user_in_project(user_id, project_id):
-        print([project, user_id, project_id, not project, not is_user_in_project(user_id, project_id)])
-        bot.send_message(user_id, "У вас нет доступа к управлению этим проектом.")
-        return
-    bot.send_message(user_id, "все ок.")
 
-    # Здесь можно добавить логику для управления проектом,
-    # например, добавление, удаление и изменение ролей участников, создание и удаление задач и т.д.
-    pass
 
 def add_user_to_project(message, project_id, user_id, role):
     if not is_user_in_project(message.from_user.id, project_id):
@@ -159,9 +150,148 @@ def change_role_in_project(message, project_id, user_id, new_role):
     # Изменение роли пользователя в проекте
     update_user_role_in_project_in_db(project_id, user_id, new_role)
 
+def add_user_to_project_workflow(message, project_id):
+    msg = bot.send_message(message.chat.id, "Введите внутренний ID пользователя, которого хотите добавить:")
+    bot.register_next_step_handler(msg, on_add_user_id_received, project_id)
+
+def on_add_user_id_received(message, project_id):
+    try:
+        user_id = int(message.text)
+        msg = bot.send_message(message.chat.id, "Выберите роль для пользователя:\n1. MEMBER\n2. ADMIN")
+        bot.register_next_step_handler(msg, on_role_selection_received, project_id, user_id)
+    except ValueError:
+        bot.send_message(message.chat.id, "Неверный формат ID. Повторите попытку.")
+
+def on_role_selection_received(message, project_id, user_id):
+    selected_role = message.text.upper()
+    if selected_role in ['1', 'MEMBER', '2', 'ADMIN']:
+        if selected_role == '1':
+            selected_role = 'MEMBER'
+        elif selected_role == '2':
+            selected_role = 'ADMIN'
+        add_user_to_project_in_db(project_id, user_id, selected_role)
+        bot.send_message(message.chat.id, "Пользователь добавлен в проект.")
+    else:
+        bot.send_message(message.chat.id, "Неверный выбор роли. Повторите попытку.")
+
+def change_user_role_workflow(message, project_id):
+    msg = bot.send_message(message.chat.id, "Введите внутренний ID пользователя, для которого хотите изменить роль:")
+    bot.register_next_step_handler(msg, on_change_role_user_id_received, project_id)
+
+def on_change_role_user_id_received(message, project_id):
+    try:
+        user_id = int(message.text)
+        msg = bot.send_message(message.chat.id, "Выберите новую роль для пользователя:\n1. MEMBER\n2. ADMIN")
+        bot.register_next_step_handler(msg, on_new_role_selection_received, project_id, user_id)
+    except ValueError:
+        bot.send_message(message.chat.id, "Неверный формат ID. Повторите попытку.")
+
+def on_new_role_selection_received(message, project_id, user_id):
+    new_role = message.text.upper()
+    if new_role in ['1', 'MEMBER', '2', 'ADMIN']:
+        if new_role == '1':
+            new_role = 'MEMBER'
+        elif new_role == '2':
+            new_role = 'ADMIN'
+        change_role_in_project(message, project_id, user_id, new_role)
+        bot.send_message(message.chat.id, "Роль пользователя изменена.")
+    else:
+        bot.send_message(message.chat.id, "Неверный выбор роли. Повторите попытку.")
+
+def remove_user_from_project_workflow(message, project_id):
+    msg = bot.send_message(message.chat.id, "Введите внутренний ID пользователя, которого хотите удалить из проекта:")
+    bot.register_next_step_handler(msg, on_remove_user_id_received, project_id)
+
+def on_remove_user_id_received(message, project_id):
+    try:
+        user_id = int(message.text)
+        remove_user_from_project(message, project_id, user_id)
+        bot.send_message(message.chat.id, "Пользователь удален из проекта.")
+    except ValueError:
+        bot.send_message(message.chat.id, "Неверный формат ID. Повторите попытку.")
+
+
+
+def manage_project(message, project_id):
+    user_id = message.chat.id
+    project = get_project_by_id(project_id)
+
+    if not project or not is_user_in_project(user_id, project_id):
+        bot.send_message(user_id, "У вас нет доступа к управлению этим проектом.")
+        return
+
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("➕ Добавить пользователя", "🔄 Изменить роль пользователя")
+    markup.row("➖ Удалить пользователя", "🔙 Назад")
+    msg = bot.send_message(user_id, "Выберите действие для управления проектом:", reply_markup=markup)
+
+    bot.register_next_step_handler(msg, on_management_option_selected, project_id)
+
+def on_management_option_selected(message, project_id):
+    option = message.text
+
+    if option == "➕ Добавить пользователя":
+        add_user_to_project_workflow(message, project_id)
+    elif option == "🔄 Изменить роль пользователя":
+        change_user_role_workflow(message, project_id)
+    elif option == "➖ Удалить пользователя":
+        remove_user_from_project_workflow(message, project_id)
+    elif option == "🔙 Назад":
+        bot.send_message(message.chat.id, "Возвращаемся к главному меню.", reply_markup=main_menu())
+    else:
+        bot.send_message(message.chat.id, "Неверный выбор опции. Повторите попытку.")
+
+
+
+def open_project(message, project_id):
+    user_id = message.chat.id
+    project = get_project_by_id(project_id)
+
+    if not project or not is_user_in_project(user_id, project_id):
+        bot.send_message(user_id, "У вас нет доступа к этому проекту.")
+        return
+
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("➕ Добавить задачу", "🔍 Просмотреть задачи")
+    markup.row("➕ Добавить сообщение", "🔍 Просмотреть сообщения")
+    markup.row("🔙 Назад")
+
+    msg = bot.send_message(user_id, f"Вы открыли проект '{project['title']}'. Выберите действие:", reply_markup=markup)
+    bot.register_next_step_handler(msg, on_project_option_selected, project_id)
+
+def on_project_option_selected(message, project_id):
+    option = message.text
+
+    if option == "➕ Добавить задачу":
+        add_task_workflow(message, project_id)
+    elif option == "🔍 Просмотреть задачи":
+        display_tasks(message, project_id)
+    elif option == "➕ Добавить сообщение":
+        add_message_workflow(message, project_id)
+    elif option == "🔍 Просмотреть сообщения":
+        display_messages(message, project_id)
+    elif option == "🔙 Назад":
+        manage_project(message, project_id)
+    else:
+        bot.send_message(message.chat.id, "Неверный выбор опции. Повторите попытку.")
 
 
 # Обработчики событий для инлайн кнопок
+def on_inline_button_click(call):
+    user_id = call.from_user.id
+    data = call.data
+
+    if data.startswith("manage_project:"):
+        project_id = int(data.split(":")[1])
+        manage_project(call.message, project_id)
+    elif data.startswith("open_tasks:"):
+        project_id = int(data.split(":")[1])
+        display_tasks(call.message, project_id)
+    elif data.startswith("open_messages:"):
+        project_id = int(data.split(":")[1])
+        display_messages(call.message, project_id)
+    # ... другие обработчики callback_data
+
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_inline_buttons(call):
@@ -183,38 +313,64 @@ def handle_inline_buttons(call):
 
 
 
+def add_task_workflow(message, project_id):
+    user_id = message.chat.id
+    msg = bot.send_message(user_id, "Введите название задачи:")
+    bot.register_next_step_handler(msg, on_task_name_received, project_id)
 
-def create_task(message, project_id):
-    user_id = message.from_user.id
+def on_task_name_received(message, project_id):
+    user_id = message.chat.id
+    task_name = message.text
+    create_task(task_name, project_id, user_id)
+    bot.send_message(user_id, "Задача успешно создана.", reply_markup=main_menu())
 
-    if not is_user_in_project(user_id, project_id):
-        bot.send_message(user_id, "У вас нет доступа к этому проекту.")
-        return
+def display_tasks(message, project_id):
+    user_id = message.chat.id
+    tasks = get_tasks(project_id)
 
-    bot.send_message(user_id, "Введите название задачи:")
+    if tasks:
+        bot.send_message(user_id, "Задачи в проекте:")
+        for task in tasks:
+            task_id = task[0]
+            task_title = task[1]
 
-    @bot.message_handler(func=lambda m: True)
-    def on_task_name_received(m):
-        task_name = m.text
-        bot.send_message(user_id, "Введите описание задачи:")
+            markup = types.InlineKeyboardMarkup()
+            manage_button = types.InlineKeyboardButton("🔧 Управление", callback_data=f"manage_task:{task_id}")
+            markup.add(manage_button)
 
-        @bot.message_handler(func=lambda m: True)
-        def on_task_description_received(m):
-            task_description = m.text
-            create_task_in_db(user_id, project_id, task_name, task_description)
-            bot.send_message(user_id, "Задача успешно создана.", reply_markup=main_menu())
+            bot.send_message(user_id, task_title, reply_markup=markup)
+    else:
+        bot.send_message(user_id, "В проекте нет задач.")
 
-def manage_task(message, task_id):
-    user_id = message.from_user.id
-    task = get_task_by_id(task_id)
+def add_message_workflow(message, project_id):
+    user_id = message.chat.id
+    msg = bot.send_message(user_id, "Введите текст сообщения:")
+    bot.register_next_step_handler(msg, on_message_text_received, project_id)
 
-    if not task or not is_user_in_project(user_id, task['project_id']):
-        bot.send_message(user_id, "У вас нет доступа к управлению этой задачей.")
-        return
+def on_message_text_received(message, project_id):
+    user_id = message.chat.id
+    message_text = message.text
+    create_message(message_text, project_id, user_id)
+    bot.send_message(user_id, "Сообщение успешно создано.", reply_markup=main_menu())
 
-    # Здесь можно добавить логику для управления задачей,
-    # например, изменение статуса, назначение исполнителя, установка дедлайна и т.д.
-    pass
+def display_messages(message, project_id):
+    user_id = message.chat.id
+    messages = get_messages(project_id)
+
+    if messages:
+        bot.send_message(user_id, "Сообщения в проекте:")
+        for msg in messages:
+            message_id = msg[0]
+            message_text = msg[1]
+
+            markup = types.InlineKeyboardMarkup()
+            manage_button = types.InlineKeyboardButton("🔧 Управление", callback_data=f"manage_message:{message_id}")
+            markup.add(manage_button)
+
+            bot.send_message(user_id, message_text, reply_markup=markup)
+    else:
+        bot.send_message(user_id, "В проекте нет сообщений.")
+
 
 def create_microproject(message, task_id):
     user_id = message.from_user.id

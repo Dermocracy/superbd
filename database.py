@@ -237,11 +237,22 @@ def delete_project(project_id):
     cursor.execute(query, (project_id,))
     connection.commit()
 
-def is_user_in_project(user_id, project_id):
+def is_user_in_project(telegram_id, project_id):
+    # Получаем внутренний ID пользователя
+    query = "SELECT id FROM users WHERE telegram_id = %s"
+    cursor.execute(query, (telegram_id,))
+    arUser = cursor.fetchone()
+    if arUser is not None:
+        internal_user_id = arUser[0]
+    else:
+        print("Ошибка: пользователь не найден")
+        return False
+
+    # Проверяем наличие пользователя в проекте
     query = '''
     SELECT * FROM user_projects WHERE user_id = %s AND project_id = %s
     '''
-    cursor.execute(query, (user_id, project_id))
+    cursor.execute(query, (internal_user_id, project_id))
     result = cursor.fetchone()
     return result is not None
 
