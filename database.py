@@ -26,6 +26,7 @@ def init_db():
     create_tasks_table()
     create_databases_table()
     create_user_projects_table()
+    create_nodes_table()
 
 
 def create_users_table():
@@ -40,6 +41,23 @@ def create_users_table():
     '''
     cursor.execute(query)
     connection.commit()
+
+def create_nodes_table():
+    query = '''
+    CREATE TABLE IF NOT EXISTS nodes (
+        id SERIAL PRIMARY KEY,
+        project_id INT REFERENCES projects (id),
+        parent_id INT REFERENCES nodes (id),
+        title VARCHAR(255) NOT NULL,
+        content TEXT,
+        media_type VARCHAR(50), 
+        media_url VARCHAR(255)
+    )
+        '''
+    cursor.execute(query)
+    connection.commit()
+
+
 
 
 def create_projects_table():
@@ -222,6 +240,7 @@ def get_project_by_id(project_id):
     else:
         return None
 
+
 def update_project(project_id, new_title, new_description):
     query = '''
     UPDATE projects SET title = %s, description = %s
@@ -255,6 +274,38 @@ def is_user_in_project(telegram_id, project_id):
     cursor.execute(query, (internal_user_id, project_id))
     result = cursor.fetchone()
     return result is not None
+
+def create_node(project_id, parent_id, title, content=None, media_type=None, media_url=None):
+    query = '''
+    INSERT INTO nodes (project_id, parent_id, title, content, media_type, media_url)
+    VALUES (%s, %s, %s, %s, %s, %s)
+    RETURNING id
+    '''
+    cursor.execute(query, (project_id, parent_id, title, content, media_type, media_url))
+    conn.commit()
+    return cursor.fetchone()[0]
+
+
+def get_nodes_by_project_id(project_id, parent_id=None):
+    query = '''
+    SELECT * FROM nodes WHERE project_id = %s AND parent_id = %s
+    '''
+    cursor.execute(query, (project_id, parent_id))
+    result = cursor.fetchall()
+    nodes = []
+
+    for row in result:
+        nodes.append({
+            'id': row[0],
+            'project_id': row[1],
+            'parent_id': row[2],
+            'title': row[3],
+            'content': row[4],
+            'media_type': row[5],
+            'media_url': row[6]
+        })
+
+    return nodes
 
 
 
@@ -301,3 +352,12 @@ def create_custom_database(title, description, owner_id):
 def search_tasks_and_projects(user_id, search_query):
     # Реализуйте логику поиска задач и проектов здесь
     return []
+
+def get_root_node(project_id):
+    query = "SELECT * FROM nodes WHERE project_id = %s AND parent_id IS NULL"
+    cursor.execute(query, (project_id,))
+    node = cursor.fetchone()
+    if node:
+        return {"id": node[0], "title": node[1], "content": node[2], "project_id": node[3], "parent_id": node[4]}
+    else:
+        return None

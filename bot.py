@@ -3,10 +3,13 @@ import telebot
 from telebot import types
 import psycopg2
 from datetime import datetime
+import logging
+sent_messages = []
+
 
 from database import (add_user, get_user_by_tg_id, update_user, delete_user,
                       create_project,add_user_to_project_in_db, remove_user_from_project_in_db, update_user_role_in_project_in_db, get_project, update_project, delete_project,
-                      create_task, get_task, update_task, delete_task,
+                      create_task, get_root_node, get_task, update_task, delete_task,
                       create_custom_database,get_projects_by_owner_id, get_project_by_id, is_user_in_project, search_tasks_and_projects, cursor)
 import database
 
@@ -88,10 +91,12 @@ def create_default_project(user_id):
     default_project_description = 'Этот проект содержит все возможные функции бота.'
     create_project(default_project_title, default_project_description, user_id)
 
-
 def display_projects(message):
+    global sent_messages  # добавьте эту строку в начало функции
+
     user_id = message.from_user.id
     projects = get_projects_for_user(user_id)
+
 
     if not projects:
         create_default_project(user_id)
@@ -101,25 +106,24 @@ def display_projects(message):
     # Отображаем список проектов
     if projects:
         bot.send_message(user_id, "Ваши проекты:")
+        sent_messages = []
         for project in projects:
             project_id = project[0]
             project_title = project[1]
 
             markup = types.InlineKeyboardMarkup()
-            manage_button = types.InlineKeyboardButton("🔧 Управление", callback_data=f"manage_project:{project_id}")
-            open_tasks_button = types.InlineKeyboardButton("📋 Задачи", callback_data=f"open_tasks:{project_id}")
-            open_messages_button = types.InlineKeyboardButton("💬 Сообщения", callback_data=f"open_messages:{project_id}")
-            markup.add(manage_button, open_tasks_button, open_messages_button)
+            open_project_button = types.InlineKeyboardButton("📂 Открыть проект", callback_data=f"open_project:{project_id}")
+            markup.add(open_project_button)
 
-            bot.send_message(user_id, project_title, reply_markup=markup)
+            sent_msg = bot.send_message(user_id, project_title, reply_markup=markup)
+            sent_messages.append(sent_msg.message_id)  # исправьте эту строку
 
     # Добавляем кнопку создания нового проекта после списка существующих проектов
     create_project_markup = types.InlineKeyboardMarkup()
     create_project_button = types.InlineKeyboardButton("➕ Создать проект", callback_data="create_project")
     create_project_markup.add(create_project_button)
-    bot.send_message(user_id, "Создать новый проект:", reply_markup=create_project_markup)
-
-
+    create_project_msg = bot.send_message(user_id, "Создать новый проект:", reply_markup=create_project_markup)
+    sent_messages.append(create_project_msg.message_id)  # исправьте эту строку
 
 
 def add_user_to_project(message, project_id, user_id, role):
@@ -243,37 +247,46 @@ def on_management_option_selected(message, project_id):
 
 
 
-def open_project(message, project_id):
-    user_id = message.chat.id
+def open_project(call, project_id):
+    global sent_messages
+
+    user_id = call.from_user.id
     project = get_project_by_id(project_id)
 
-    if not project or not is_user_in_project(user_id, project_id):
-        bot.send_message(user_id, "У вас нет доступа к этому проекту.")
-        return
+    # Удаляем предыдущие сообщения
+    for message_id in sent_messages:
+        try:
+            bot.delete_message(user_id, message_id)
+        except Exception as e:
+            print(f"Error deleting message: {e}")
 
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("➕ Добавить задачу", "🔍 Просмотреть задачи")
-    markup.row("➕ Добавить сообщение", "🔍 Просмотреть сообщения")
-    markup.row("🔙 Назад")
+    sent_messages = []
 
-    msg = bot.send_message(user_id, f"Вы открыли проект '{project['title']}'. Выберите действие:", reply_markup=markup)
-    bot.register_next_step_handler(msg, on_project_option_selected, project_id)
+    if project is not None:
+        root_node = get_root_node(project_id)
+        display_node(call, root_node['id'])
 
-def on_project_option_selected(message, project_id):
-    option = message.text
+        # Отправляем сообщение с кнопками действий
+        actions_markup = types.InlineKeyboardMarkup(row_width=1)
+        add_task_button = types.InlineKeyboardButton("➕ Добавить задачу", callback_data=f"add_task:{project_id}")
+        add_message_button = types.InlineKeyboardButton("📝 Добавить сообщение", callback_data=f"add_message:{project_id}")
+        close_button = types.InlineKeyboardButton("❌ Закрыть", callback_data=f"close_project:{project_id}")
 
-    if option == "➕ Добавить задачу":
-        add_task_workflow(message, project_id)
-    elif option == "🔍 Просмотреть задачи":
-        display_tasks(message, project_id)
-    elif option == "➕ Добавить сообщение":
-        add_message_workflow(message, project_id)
-    elif option == "🔍 Просмотреть сообщения":
-        display_messages(message, project_id)
-    elif option == "🔙 Назад":
-        manage_project(message, project_id)
-    else:
-        bot.send_message(message.chat.id, "Неверный выбор опции. Повторите попытку.")
+        actions_markup.add(add_task_button, add_message_button, close_button)
+
+        actions_msg = bot.send_message(user_id, "Выберите действие:", reply_markup=actions_markup)
+        sent_messages.append(actions_msg.message_id)  # добавьте эту строку
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("close_project:"))
+def close_project_handler(call):
+    project_id = int(call.data.split(":")[1])
+    close_project(call, project_id)
+
+def close_project(call, project_id):
+    user_id = call.from_user.id
+    bot.delete_message(user_id, call.message.message_id)  # удалите сообщение с открытым проектом
+
+
 
 
 # Обработчики событий для инлайн кнопок
@@ -290,8 +303,40 @@ def on_inline_button_click(call):
     elif data.startswith("open_messages:"):
         project_id = int(data.split(":")[1])
         display_messages(call.message, project_id)
+    elif data.startswith("open_project:"):
+            logging.basicConfig(level=logging.INFO)
+            logging.info(f"Open project: {project_id}")
+            project_id = int(data.split(":")[1])
+            open_project(call.message, project_id)
     # ... другие обработчики callback_data
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith("open_node"))
+def open_node_handler(call):
+    node_id = int(call.data.split(":")[1])
+    display_node(call, node_id)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("close_node"))
+def close_node_handler(call):
+    node_id = int(call.data.split(":")[1])
+    display_node(call, node_id, go_back=True)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("add_task"))
+def add_task_handler(call):
+    project_id = int(call.data.split(":")[1])
+    # Здесь добавьте код для добавления задачи и обновления узла
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("add_message"))
+def add_message_handler(call):
+    project_id = int(call.data.split(":")[1])
+    # Здесь добавьте код для добавления сообщения и обновления узла
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('open_project:'))
+def open_project_handler(call):
+    project_id = int(call.data.split(':')[1])
+    open_project(call, project_id)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_inline_buttons(call):
@@ -446,6 +491,77 @@ def search(message):
                 bot.send_message(user_id, f"Проект: {item_title}\n\n{item_description}", reply_markup=markup)
 
 # ... (реализация остальных функций)
+
+def display_node(call, node_id, go_back=False):
+    global sent_messages
+
+    user_id = call.from_user.id
+    node = get_node_by_id(node_id)
+
+    if go_back:
+        parent_node = get_node_by_id(node['parent_id'])
+        node_id = parent_node['id']
+
+    # Удаляем предыдущие сообщения
+    for message_id in sent_messages:
+        try:
+            bot.delete_message(user_id, message_id)
+        except Exception as e:
+            print(f"Error deleting message: {e}")
+
+    sent_messages = []
+
+    if node is not None:
+        title = f"📁 {node['title']}"
+        if node['content']:
+            title += f"\n\n{node['content']}"
+
+        # Отправляем сообщение с информацией о текущем узле
+        sent_msg = bot.send_message(user_id, title)
+        sent_messages.append(sent_msg.message_id)
+
+        # Отправляем сообщение с кнопками действий
+        actions_markup = types.InlineKeyboardMarkup()
+
+        child_nodes = get_nodes_by_project_id(node['project_id'], parent_id=node['id'])
+
+        for child_node in child_nodes:
+            button = types.InlineKeyboardButton(child_node['title'], callback_data=f"open_node:{child_node['id']}")
+            actions_markup.add(button)
+
+        if node['parent_id'] is not None:
+            back_button = types.InlineKeyboardButton("🔙 Назад", callback_data=f"back_node:{node['id']}")
+            actions_markup.add(back_button)
+
+            close_button = types.InlineKeyboardButton("❌ Закрыть", callback_data="close_project")
+            actions_markup.add(close_button)
+
+            add_file_button = types.InlineKeyboardButton("📎 Добавить фото/видео",
+                                                         callback_data=f"add_file:{node['id']}")
+            actions_markup.add(add_file_button)
+
+            main_menu_button = types.InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+            actions_markup.add(main_menu_button)
+
+            sent_msg = bot.send_message(user_id, "Выберите действие:", reply_markup=actions_markup)
+            sent_messages.append(sent_msg.message_id)
+        else:
+            bot.answer_callback_query(call.id, "Проект не найден")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("open_node:"))
+def open_node_handler(call):
+    node_id = int(call.data.split(":")[1])
+    display_node(call, node_id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("back_node:"))
+def back_node_handler(call):
+    node_id = int(call.data.split(":")[1])
+    display_node(call, node_id, go_back=True)
+
+@bot.callback_query_handler(func=lambda call: call.data == "add_file")
+def add_file_handler(call):
+    bot.answer_callback_query(call.id, "Функция добавления файла пока не реализована")
+
 
 # Запуск бота
 if __name__ == '__main__':
