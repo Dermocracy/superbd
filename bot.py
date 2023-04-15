@@ -5,7 +5,7 @@ import psycopg2
 from datetime import datetime
 
 from database import (add_user, get_user_by_tg_id, update_user, delete_user,
-                      create_project, get_project, update_project, delete_project,
+                      create_project,add_user_to_project_in_db, remove_user_from_project_in_db, update_user_role_in_project_in_db, get_project, update_project, delete_project,
                       create_task, get_task, update_task, delete_task,
                       create_custom_database,get_projects_by_owner_id, get_project_by_id, is_user_in_project, search_tasks_and_projects, cursor)
 import database
@@ -49,32 +49,44 @@ def handle_search(message):
 def handle_databases(message):
     pass  # здесь можно добавить обработчик для пункта меню "Базы данных"
 
-def create_project_workflow(user_id):  # Изменено название функции
-    bot.send_message(user_id, "Введите название проекта:")
-
-    @bot.message_handler(func=lambda m: True)
-    def on_project_name_received(m):
-        project_name = m.text
-        bot.send_message(user_id, "Введите описание проекта:")
-
-        @bot.message_handler(func=lambda m: True)
-        def on_project_description_received(m):
-            project_description = m.text
-            database.create_project(project_name, project_description, user_id)  # Используйте функцию create_project из модуля database
-            bot.send_message(user_id, "Проект успешно создан.", reply_markup=main_menu())
+@bot.callback_query_handler(func=lambda call: call.data == "create_project")
+def on_create_project_button_pressed(call):
+    bot.answer_callback_query(call.id)
+    create_project_workflow(call.from_user.id)
 
 
+def create_project_workflow(user_id):
+    msg = bot.send_message(user_id, "Введите название проекта:")
+    bot.register_next_step_handler(msg, on_project_name_received, user_id)
+
+def on_project_name_received(message, user_id):
+    if message.chat.id == user_id:
+        project_name = message.text
+        msg = bot.send_message(user_id, "Введите описание проекта:")
+        bot.register_next_step_handler(msg, on_project_description_received, user_id, project_name)
+
+def on_project_description_received(message, user_id, project_name):
+    if message.chat.id == user_id:
+        project_description = message.text
+        database.create_project(project_name, project_description, user_id)
+        bot.send_message(user_id, "Проект успешно создан.", reply_markup=main_menu())
 
 def get_projects_for_user(user_id):
-    user_projects = get_projects_by_owner_id(user_id)
-    return user_projects
+    query = '''
+    SELECT projects.id, projects.title
+    FROM projects
+    INNER JOIN user_projects ON projects.id = user_projects.project_id
+    INNER JOIN users ON user_projects.user_id = users.id
+    WHERE users.telegram_id = %s
+    '''
+    cursor.execute(query, (user_id,))
+    return cursor.fetchall()
+
 
 def create_default_project(user_id):
     default_project_title = 'Основной проект'
     default_project_description = 'Этот проект содержит все возможные функции бота.'
     create_project(default_project_title, default_project_description, user_id)
-
-
 
 
 def display_projects(message):
@@ -86,16 +98,24 @@ def display_projects(message):
         projects = get_projects_for_user(user_id)
         bot.send_message(user_id, "Мы создали для вас основной проект, который содержит все возможные функции бота.")
 
-    for project in projects:
-        project_id = project[0]
-        project_title = project[1]
+    # Отображаем список проектов
+    if projects:
+        bot.send_message(user_id, "Ваши проекты:")
+        for project in projects:
+            project_id = project[0]
+            project_title = project[1]
 
-        markup = types.InlineKeyboardMarkup()
-        manage_button = types.InlineKeyboardButton("🔧 Управление", callback_data=f"manage_project:{project_id}")
-        markup.add(manage_button)
+            markup = types.InlineKeyboardMarkup()
+            manage_button = types.InlineKeyboardButton("🔧 Управление", callback_data=f"manage_project:{project_id}")
+            markup.add(manage_button)
 
-        bot.send_message(user_id, project_title, reply_markup=markup)
+            bot.send_message(user_id, project_title, reply_markup=markup)
 
+    # Добавляем кнопку создания нового проекта после списка существующих проектов
+    create_project_markup = types.InlineKeyboardMarkup()
+    create_project_button = types.InlineKeyboardButton("➕ Создать проект", callback_data="create_project")
+    create_project_markup.add(create_project_button)
+    bot.send_message(user_id, "Создать новый проект:", reply_markup=create_project_markup)
 
 def manage_project(message, project_id):
     user_id = message.chat.id   
@@ -117,6 +137,7 @@ def add_user_to_project(message, project_id, user_id, role):
         return
 
 
+
     # Добавление пользователя к проекту с заданной ролью
     add_user_to_project_in_db(project_id, user_id, role)
 
@@ -136,7 +157,8 @@ def change_role_in_project(message, project_id, user_id, new_role):
         return
 
     # Изменение роли пользователя в проекте
-    update_user_role_in_project(project_id, user_id, new_role)
+    update_user_role_in_project_in_db(project_id, user_id, new_role)
+
 
 
 # Обработчики событий для инлайн кнопок
