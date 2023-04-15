@@ -125,13 +125,17 @@ def add_user(telegram_id, username, first_name, last_name):
     cursor.execute(query, (telegram_id, username, first_name, last_name))
     connection.commit()
 
-def add_user_to_project_in_db(project_id, user_id, role):
-    query = '''
-    INSERT INTO user_projects (user_id, project_id, role)
-    VALUES (%s, %s, %s);
-    '''
-    cursor.execute(query, (user_id, project_id, role))
-    connection.commit()
+def add_user_to_project_in_db(user_id, project_id, role):
+    if not is_user_in_project(user_id, project_id):
+        query = '''
+        INSERT INTO user_projects (user_id, project_id, role)
+        VALUES (%s, %s, %s);
+        '''
+        cursor.execute(query, (user_id, project_id, role))
+        connection.commit()
+    else:
+        print("Пользователь уже добавлен в проект.")
+
 
 def remove_user_from_project_in_db(project_id, user_id):
     query = '''
@@ -181,16 +185,18 @@ def delete_user(user_id):
     connection.commit()
 
 # Functions for Projects table
-def create_project(title, description, user_id):
+def create_project(user_id, title, description):
     # Получаем внутренний ID пользователя
     query = "SELECT id FROM users WHERE telegram_id = %s"
     cursor.execute(query, (user_id,))
     arUser = cursor.fetchone()
     if arUser is not None:
         internal_user_id = arUser[0]
+        print(f"internal_user_id: {internal_user_id}")  # добавьте эту строку для отладки
     else:
         print("Ошибка: пользователь не найден")
         return
+
 
     # Создаем проект
     query = '''
@@ -209,6 +215,9 @@ def create_project(title, description, user_id):
     cursor.execute(query, (internal_user_id, project_id, role))
 
     connection.commit()
+
+    return project_id
+
 
 def get_projects_by_owner_id(user_id):
     query = '''
@@ -256,24 +265,15 @@ def delete_project(project_id):
     cursor.execute(query, (project_id,))
     connection.commit()
 
-def is_user_in_project(telegram_id, project_id):
-    # Получаем внутренний ID пользователя
-    query = "SELECT id FROM users WHERE telegram_id = %s"
-    cursor.execute(query, (telegram_id,))
-    arUser = cursor.fetchone()
-    if arUser is not None:
-        internal_user_id = arUser[0]
-    else:
-        print("Ошибка: пользователь не найден")
-        return False
-
-    # Проверяем наличие пользователя в проекте
+def is_user_in_project(user_id, project_id):
     query = '''
-    SELECT * FROM user_projects WHERE user_id = %s AND project_id = %s
+    SELECT COUNT(*) FROM user_projects
+    WHERE user_id = %s AND project_id = %s;
     '''
-    cursor.execute(query, (internal_user_id, project_id))
+    cursor.execute(query, (user_id, project_id))
     result = cursor.fetchone()
-    return result is not None
+    return result[0] > 0
+
 
 def create_node(project_id, parent_id, title, content=None, media_type=None, media_url=None):
     query = '''
@@ -308,6 +308,87 @@ def get_nodes_by_project_id(project_id, parent_id=None):
     return nodes
 
 
+def get_node_by_id(node_id):
+    query = '''
+    SELECT * FROM nodes WHERE id = %s
+    '''
+    cursor.execute(query, (node_id,))
+    row = cursor.fetchone()
+
+    if row:
+        return {
+            'id': row[0],
+            'project_id': row[1],
+            'parent_id': row[2],
+            'title': row[3],
+            'content': row[4],
+            'media_type': row[5],
+            'media_url': row[6]
+        }
+    return None
+
+
+
+def add_message(bot, user_id, project_id, parent_id, title, content, media_type=None, media_url=None):
+    query = '''
+    INSERT INTO nodes (project_id, parent_id, title, content, media_type, media_url)
+    VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+    '''
+    cursor.execute(query, (project_id, parent_id, title, content, media_type, media_url))
+    connection.commit()
+    node_id = cursor.fetchone()[0]
+
+
+def get_messages_by_parent_id(parent_id):
+    query = '''
+    SELECT * FROM nodes WHERE parent_id = %s
+    '''
+    cursor.execute(query, (parent_id,))
+    return cursor.fetchall()
+
+def list_projects(user_id):
+    # Получаем внутренний ID пользователя
+    query = "SELECT id FROM users WHERE telegram_id = %s"
+    cursor.execute(query, (user_id,))
+    arUser = cursor.fetchone()
+    if arUser is not None:
+        internal_user_id = arUser[0]
+    else:
+        print("Ошибка: пользователь не найден")
+        return []
+
+    query = '''
+    SELECT p.id, p.title, p.description
+    FROM projects p
+    JOIN user_projects up ON p.id = up.project_id
+    WHERE up.user_id = %s
+    '''
+    cursor.execute(query, (internal_user_id,))
+    projects = cursor.fetchall()
+
+    return projects
+
+def get_projects_for_user(telegram_id):
+    # Получаем внутренний ID пользователя
+    query = "SELECT id FROM users WHERE telegram_id = %s"
+    cursor.execute(query, (telegram_id,))
+    arUser = cursor.fetchone()
+    if arUser is not None:
+        internal_user_id = arUser[0]
+    else:
+        print("Ошибка: пользователь не найден")
+        return
+
+    # Получаем список проектов пользователя
+    query = '''
+    SELECT p.id, p.title, p.description
+    FROM projects p
+    JOIN user_projects up ON p.id = up.project_id
+    WHERE up.user_id = %s
+    '''
+    cursor.execute(query, (internal_user_id,))
+    projects = cursor.fetchall()
+    return projects
 
 # Functions for Tasks table
 def create_task(title, description, deadline, project_id):
